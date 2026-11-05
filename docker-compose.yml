@@ -1,0 +1,87 @@
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: data430_project2_postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./sql/schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  airflow:
+    build:
+      context: ./scripts
+      dockerfile: Dockerfile.airflow
+    image: data430-project2-airflow:2.10.5
+    container_name: data430_project2_airflow
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      AIRFLOW_HOME: /opt/airflow
+      POSTGRES_HOST: ${POSTGRES_HOST}
+      POSTGRES_PORT: ${POSTGRES_PORT}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      AIRFLOW__CORE__EXECUTOR: SequentialExecutor
+      AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: sqlite:////opt/airflow/airflow.db
+      AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/dags
+      _PIP_ADDITIONAL_REQUIREMENTS: "Faker PyYAML psycopg2-binary"
+    ports:
+      - "8081:8080"
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./data:/opt/airflow/data
+      - ./data:/opt/spark-data
+      - spark_cleaned_data:/opt/spark-data/cleaned
+      - ./scripts:/opt/airflow/scripts
+      - ./scripts:/opt/spark-apps
+      - ./sql:/opt/airflow/sql
+    command: standalone
+
+  
+  spark-master:
+    build:
+      context: ./scripts
+      dockerfile: Dockerfile.spark
+    image: data430-project2-spark:3.5.3-python312
+    container_name: data430_project2_spark_master
+    command: ["/opt/spark/bin/spark-class", "org.apache.spark.deploy.master.Master"]
+    ports:
+      - "7077:7077"
+      - "8082:8080"
+    volumes:
+      - ./data:/opt/spark-data
+
+  spark-worker:
+    image: data430-project2-spark:3.5.3-python312
+    container_name: data430_project2_spark_worker
+    user: "0:0"
+    depends_on:
+      - spark-master
+    command: ["/opt/spark/bin/spark-class", "org.apache.spark.deploy.worker.Worker", "spark://spark-master:7077"]
+    environment:
+      SPARK_WORKER_CORES: 2
+      SPARK_WORKER_MEMORY: 2G
+    ports:
+      - "8083:8081"
+    volumes:
+      - ./data:/opt/spark-data
+      - spark_cleaned_data:/opt/spark-data/cleaned
+
+
+volumes:
+  postgres_data:
+  spark_cleaned_data:
