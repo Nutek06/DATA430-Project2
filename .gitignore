@@ -19,10 +19,10 @@ Thumbs.db
 .idea/
 
 # Generated data files
-data/raw/*
-data/cleaned/*
-!data/raw/.gitkeep
-!data/cleaned/.gitkeep
+data/spark_raw/
+data/spark_raw_v2/
+data/analytics/
+data/cleaned/**/*.crc
 
 # Spark files
 spark-warehouse/
