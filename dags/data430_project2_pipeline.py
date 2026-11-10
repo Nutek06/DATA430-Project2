@@ -26,7 +26,6 @@ def validate_database():
     try:
         with connection.cursor() as cursor:
 
-            # Expected records from Spark output
             expected_counts = {
                 "customers": 99900,
                 "products": 99861,
@@ -48,11 +47,7 @@ def validate_database():
             print("\nPOSTGRESQL TABLE VALIDATION")
 
             for table, expected in expected_counts.items():
-
-                cursor.execute(
-                    f"SELECT COUNT(*) FROM {table}"
-                )
-
+                cursor.execute(f"SELECT COUNT(*) FROM {table}")
                 actual = cursor.fetchone()[0]
 
                 print(
@@ -65,7 +60,6 @@ def validate_database():
                         f"{table}: expected {expected}, found {actual}"
                     )
 
-            # Check customer foreign-key relationships
             cursor.execute("""
                 SELECT COUNT(*)
                 FROM orders o
@@ -75,20 +69,16 @@ def validate_database():
             """)
 
             orphan_orders = cursor.fetchone()[0]
-
             print(f"Orphan orders: {orphan_orders}")
 
             if orphan_orders != 0:
-                raise ValueError(
-                    "Orphan customer references found."
-                )
+                raise ValueError("Orphan customer references found.")
 
         print("\nALL 15 TABLES VALIDATED SUCCESSFULLY")
         print("DATABASE VALIDATION SUCCESSFUL")
 
     finally:
         connection.close()
-
 
 
 # --------------------------------------------------
@@ -104,14 +94,23 @@ default_args = {
 with DAG(
     dag_id="data430_project2_pipeline",
     default_args=default_args,
-    description="DATA430 Project 2 Spark ETL and Analytics Pipeline",
+    description="DATA430 Project 2 - Nine Task Spark ETL Pipeline",
     start_date=datetime(2026, 1, 1),
     schedule=None,
     catchup=False,
     tags=["DATA430", "Spark", "PostgreSQL"],
 ) as dag:
 
-    # 1. Validate existing generated CSV files
+    # 1. Generate source data
+    generate_data = BashOperator(
+        task_id="generate_data",
+        bash_command=(
+            "cd /opt/airflow && "
+            "python /opt/airflow/scripts/generate_spark_data_v2.py"
+        ),
+    )
+
+    # 2. Validate source CSV files
     file_validation = BashOperator(
         task_id="file_validation",
         bash_command=(
@@ -119,23 +118,49 @@ with DAG(
         ),
     )
 
-    # 2. Clean all three datasets
-    spark_cleanse = BashOperator(
-        task_id="spark_cleanse",
+    # Spark submission command
+    SPARK_SUBMIT = (
+        "spark-submit "
+        "--master spark://spark-master:7077 "
+    )
+
+    # 3. Clean customers
+    spark_cleanse_customers = BashOperator(
+        task_id="spark_cleanse_customers",
         bash_command=(
-            "python /opt/airflow/scripts/spark_cleanse.py"
+            SPARK_SUBMIT +
+            "/opt/airflow/scripts/spark_cleanse_customers.py"
         ),
     )
 
-    # 3. Generate analytics
+    # 4. Clean products
+    spark_cleanse_products = BashOperator(
+        task_id="spark_cleanse_products",
+        bash_command=(
+            SPARK_SUBMIT +
+            "/opt/airflow/scripts/spark_cleanse_products.py"
+        ),
+    )
+
+    # 5. Clean orders using cleaned customers
+    spark_cleanse_orders = BashOperator(
+        task_id="spark_cleanse_orders",
+        bash_command=(
+            SPARK_SUBMIT +
+            "/opt/airflow/scripts/spark_cleanse_orders.py"
+        ),
+    )
+
+    # 6. Generate analytics
     spark_analytics = BashOperator(
         task_id="spark_analytics",
         bash_command=(
-            "python /opt/airflow/scripts/spark_analytics.py"
+            SPARK_SUBMIT +
+            "/opt/airflow/scripts/spark_analytics.py"
         ),
     )
 
-    # 4. Load cleaned data into PostgreSQL
+    # 7. Load data into PostgreSQL
     load_to_postgres = BashOperator(
         task_id="load_to_postgres",
         bash_command=(
@@ -143,13 +168,13 @@ with DAG(
         ),
     )
 
-    # 5. Verify database results
+    # 8. Validate database
     data_validation = PythonOperator(
         task_id="data_validation",
         python_callable=validate_database,
     )
 
-    # 6. Pipeline completion
+    # 9. Completion
     completion = BashOperator(
         task_id="completion",
         bash_command=(
@@ -157,10 +182,13 @@ with DAG(
         ),
     )
 
-    # Pipeline execution order
+    # Required execution order
     (
-        file_validation
-        >> spark_cleanse
+        generate_data
+        >> file_validation
+        >> spark_cleanse_customers
+        >> spark_cleanse_products
+        >> spark_cleanse_orders
         >> spark_analytics
         >> load_to_postgres
         >> data_validation
